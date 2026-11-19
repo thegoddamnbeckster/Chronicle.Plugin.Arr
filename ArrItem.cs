@@ -17,9 +17,19 @@ internal sealed record ArrItem(
     IReadOnlyList<string> FileNames,
     int? TmdbId,
     string? ImdbId,
-    /// <summary>Lidarr's MusicBrainz id, or Readarr's Goodreads id.</summary>
+    /// <summary>Lidarr's MusicBrainz id (artist, or album as a release group), Readarr's Goodreads author id, or a Readarr book's
+    /// Goodreads edition id.</summary>
     string? ForeignId)
 {
+    /// <summary>For an album, its artist's name; for a book, its author's. Null for artists, authors, films and shows.</summary>
+    public string? ParentName { get; init; }
+
+    /// <summary>A book's ISBN-13, when its edition has one.</summary>
+    public string? Isbn13 { get; init; }
+
+    /// <summary>True for an album or a book (the application's second list).</summary>
+    public bool IsChild { get; init; }
+
     /// <summary>Every title this item is known by.</summary>
     public IEnumerable<string> AllTitles()
     {
@@ -32,19 +42,21 @@ internal sealed record ArrItem(
 /// <summary>Turns each application's list response into <see cref="ArrItem"/>s. Anything unexpected is skipped, never thrown.</summary>
 internal static class ArrParser
 {
-    public static List<ArrItem> ParseList(ArrApp app, JsonDocument doc)
+    public static List<ArrItem> ParseList(ArrApp app, JsonDocument doc, bool secondary = false)
     {
         var items = new List<ArrItem>();
         if (doc.RootElement.ValueKind != JsonValueKind.Array) return items;
         foreach (var e in doc.RootElement.EnumerateArray())
         {
             if (e.ValueKind != JsonValueKind.Object) continue;
-            var item = app switch
+            var item = (app, secondary) switch
             {
-                ArrApp.Radarr => ParseMovie(e),
-                ArrApp.Sonarr => ParseSeries(e),
-                ArrApp.Lidarr => ParseArtist(e),
-                _ => ParseAuthor(e),
+                (ArrApp.Radarr, _) => ParseMovie(e),
+                (ArrApp.Sonarr, _) => ParseSeries(e),
+                (ArrApp.Lidarr, false) => ParseArtist(e),
+                (ArrApp.Lidarr, true) => ParseAlbum(e),
+                (_, false) => ParseAuthor(e),
+                _ => ParseBook(e),
             };
             if (item is not null) items.Add(item);
         }
@@ -86,6 +98,44 @@ internal static class ArrParser
         if (name is null) return null;
         return new ArrItem(ArrApp.Readarr, name, null, null, [], Str(e, "path"), [], null, null, Str(e, "foreignAuthorId"));
     }
+
+    /// <summary>A Lidarr album: its foreignAlbumId is the MusicBrainz release-group id; the artist is nested.</summary>
+    private static ArrItem? ParseAlbum(JsonElement e)
+    {
+        var title = Str(e, "title");
+        var artist = e.TryGetProperty("artist", out var a) && a.ValueKind == JsonValueKind.Object ? Str(a, "artistName") : null;
+        if (title is null || artist is null) return null;
+        return new ArrItem(ArrApp.Lidarr, title, null, YearOf(Str(e, "releaseDate")), [], null, [], null, null, Str(e, "foreignAlbumId"))
+        { ParentName = artist, IsChild = true };
+    }
+
+    /// <summary>A Readarr book: the author is nested; the monitored edition (else the first) supplies the Goodreads edition id and the
+    /// ISBN-13. The book's own foreignBookId is a Goodreads WORK id, which Open Library does not index; the edition id is the one it does.</summary>
+    private static ArrItem? ParseBook(JsonElement e)
+    {
+        var title = Str(e, "title");
+        var author = e.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object ? Str(a, "authorName") : null;
+        if (title is null || author is null) return null;
+
+        string? editionId = null, isbn = null;
+        if (e.TryGetProperty("editions", out var eds) && eds.ValueKind == JsonValueKind.Array)
+        {
+            var list = eds.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Object).ToList();
+            var edition = list.FirstOrDefault(x => x.TryGetProperty("monitored", out var m) && m.ValueKind == JsonValueKind.True);
+            if (edition.ValueKind != JsonValueKind.Object && list.Count > 0) edition = list[0];
+            if (edition.ValueKind == JsonValueKind.Object)
+            {
+                editionId = Str(edition, "foreignEditionId");
+                var digits = new string((Str(edition, "isbn13") ?? "").Where(char.IsDigit).ToArray());
+                isbn = digits.Length == 13 ? digits : null;
+            }
+        }
+        return new ArrItem(ArrApp.Readarr, title, null, YearOf(Str(e, "releaseDate")), [], null, [], null, null, editionId)
+        { ParentName = author, Isbn13 = isbn, IsChild = true };
+    }
+
+    private static int? YearOf(string? date) =>
+        date is { Length: >= 4 } && int.TryParse(date.AsSpan(0, 4), out var y) && y is > 1000 and < 3000 ? y : null;
 
     private static IReadOnlyList<string> AltTitles(JsonElement e)
     {

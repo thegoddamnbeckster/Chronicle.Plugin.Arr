@@ -59,6 +59,24 @@ public class LocatorTests
     [ { "authorName": "Terry Pratchett", "foreignAuthorId": "1654", "path": "/books/Terry Pratchett" } ]
     """;
 
+    // Shapes of Lidarr's /api/v1/album and Readarr's /api/v1/book, trimmed to what the plugin reads.
+    private const string LidarrAlbums = """
+    [ { "title": "Seventeen Days", "foreignAlbumId": "11111111-aaaa-bbbb-cccc-000000000001", "releaseDate": "2005-02-08T00:00:00Z", "artist": { "artistName": "3 Doors Down" } },
+      { "title": "Greatest Hits", "foreignAlbumId": "11111111-aaaa-bbbb-cccc-000000000002", "releaseDate": "2012-01-01T00:00:00Z", "artist": { "artistName": "3 Doors Down" } },
+      { "title": "Greatest Hits", "foreignAlbumId": "11111111-aaaa-bbbb-cccc-000000000003", "releaseDate": "2001-01-01T00:00:00Z", "artist": { "artistName": "Someone Else" } },
+      { "title": "Orphan", "foreignAlbumId": "x" } ]
+    """;
+
+    private const string ReadarrBooks = """
+    [ { "title": "The Martian", "releaseDate": "2014-02-11T00:00:00Z", "foreignBookId": "18457474", "author": { "authorName": "Andy Weir" },
+        "editions": [ { "foreignEditionId": "111", "isbn13": "9780804139021", "monitored": false },
+                      { "foreignEditionId": "18007564", "isbn13": "978-0-553-41802-6", "monitored": true } ] },
+      { "title": "Artemis", "releaseDate": "2017-11-14T00:00:00Z", "foreignBookId": "33", "author": { "authorName": "Andy Weir" },
+        "editions": [ { "foreignEditionId": "222", "isbn13": "123", "monitored": false } ] },
+      { "title": "Artemis", "foreignBookId": "44", "author": { "authorName": "Somebody Else" }, "editions": [] },
+      { "title": "No Author Here", "editions": [] } ]
+    """;
+
     private static readonly Dictionary<string, string> AllApps = new()
     {
         ["radarr_url"] = "http://radarr.lan:7878", ["radarr_api_key"] = "radarr-key",
@@ -74,6 +92,8 @@ public class LocatorTests
         fake.Routes["sonarr.lan/api/v3/series"] = (HttpStatusCode.OK, SonarrSeries);
         fake.Routes["lidarr.lan/api/v1/artist"] = (HttpStatusCode.OK, LidarrArtists);
         fake.Routes["readarr.lan/api/v1/author"] = (HttpStatusCode.OK, ReadarrAuthors);
+        fake.Routes["lidarr.lan/api/v1/album"] = (HttpStatusCode.OK, LidarrAlbums);
+        fake.Routes["readarr.lan/api/v1/book"] = (HttpStatusCode.OK, ReadarrBooks);
         foreach (var host in new[] { "radarr.lan/api/v3", "sonarr.lan/api/v3", "lidarr.lan/api/v1", "readarr.lan/api/v1" })
             fake.Routes[host + "/system/status"] = (HttpStatusCode.OK, "{\"version\":\"1\"}");
 
@@ -178,6 +198,145 @@ public class LocatorTests
         var (locator, _, _, _) = Make();
         var found = await locator.LocateAsync(LocatorFamily.Book, new LocatorQuery("Terry Pratchett"));
         Assert.Equal("1654", found!.ExternalIds["goodreads"]);
+    }
+
+    // ── Library items: artists, albums, authors, books (asked by Chronicle's enrichment) ──
+
+    private static LocatorQuery Item(string title, string type, int level, string? parent = null, int? year = null) =>
+        new(title, year) { MediaTypeName = type, HierarchyLevel = level, ParentName = parent };
+
+    [Fact]
+    public async Task Lidarr_ArtistItem_GivesTheMusicBrainzArtistId()
+    {
+        var (locator, _, _, _) = Make();
+        var found = await locator.LocateItemAsync(Item("3 Doors Down", "music", 0));
+        Assert.Equal("artist:2386cd66-e923-4e8e-bf14-2eebe2e9b973", found!.ExternalIds["musicbrainz"]);
+    }
+
+    [Fact]
+    public async Task Lidarr_AlbumItem_GivesTheReleaseGroupId_WithinItsOwnArtist()
+    {
+        var (locator, _, _, _) = Make();
+        var mine = await locator.LocateItemAsync(Item("Greatest Hits", "music", 1, "3 Doors Down"));
+        var theirs = await locator.LocateItemAsync(Item("Greatest Hits", "music", 1, "Someone Else"));
+
+        Assert.Equal("release-group:11111111-aaaa-bbbb-cccc-000000000002", mine!.ExternalIds["musicbrainz"]);
+        Assert.Equal("release-group:11111111-aaaa-bbbb-cccc-000000000003", theirs!.ExternalIds["musicbrainz"]);   // same title, other artist
+        Assert.Contains("3 Doors Down", mine.Reason);
+    }
+
+    [Fact]
+    public async Task AnAlbumWithNoArtistNamed_IsAMiss_NeverGuessedFromTheTitleAlone()
+    {
+        var (locator, _, _, _) = Make();
+        Assert.Null(await locator.LocateItemAsync(Item("Greatest Hits", "music", 1)));           // two artists have one
+        Assert.Null(await locator.LocateItemAsync(Item("Seventeen Days", "music", 1, "  ")));
+    }
+
+    [Fact]
+    public async Task AnAlbumInTheWrongArtist_IsAMiss()
+    {
+        var (locator, _, _, _) = Make();
+        Assert.Null(await locator.LocateItemAsync(Item("Seventeen Days", "music", 1, "Someone Else")));
+    }
+
+    [Fact]
+    public async Task Tracks_AreNotAskedAbout()
+    {
+        var (locator, fake, _, _) = Make();
+        Assert.Null(await locator.LocateItemAsync(Item("Duck and Run", "music", 2, "Seventeen Days")));
+        Assert.Empty(fake.Requests);   // not even a request
+    }
+
+    [Fact]
+    public async Task Readarr_BookItem_GivesTheMonitoredEditionsGoodreadsIdAndIsbn13()
+    {
+        var (locator, _, _, _) = Make();
+        var found = await locator.LocateItemAsync(Item("The Martian", "books", 1, "Andy Weir", 2014));
+
+        Assert.Equal("18007564", found!.ExternalIds["goodreads"]);        // the monitored edition, not the first one listed
+        Assert.Equal("9780553418026", found.ExternalIds["isbn13"]);        // hyphens removed
+    }
+
+    [Fact]
+    public async Task Readarr_AnIsbnThatIsNotThirteenDigits_IsNotOffered()
+    {
+        var (locator, _, _, _) = Make();
+        var found = await locator.LocateItemAsync(Item("Artemis", "books", 1, "Andy Weir"));
+        Assert.Equal("222", found!.ExternalIds["goodreads"]);
+        Assert.False(found.ExternalIds.ContainsKey("isbn13"));
+    }
+
+    [Fact]
+    public async Task Readarr_SameTitleByAnotherAuthor_IsNotConfused_AndAudiobooksUseTheSameApplication()
+    {
+        var (locator, _, _, _) = Make();
+        Assert.Null(await locator.LocateItemAsync(Item("Artemis", "books", 1, "Somebody Else")));   // that book has no edition id to give
+        Assert.NotNull(await locator.LocateItemAsync(Item("The Martian", "audiobooks", 1, "Andy Weir")));
+    }
+
+    [Fact]
+    public async Task Readarr_AuthorItem_GivesTheGoodreadsAuthorId()
+    {
+        var (locator, _, _, _) = Make();
+        var found = await locator.LocateItemAsync(Item("Terry Pratchett", "books", 0));
+        Assert.Equal("1654", found!.ExternalIds["goodreads"]);
+    }
+
+    [Fact]
+    public async Task EntriesMissingAnArtistOrAuthor_AreSkipped()
+    {
+        var (locator, _, _, _) = Make();
+        Assert.Null(await locator.LocateItemAsync(Item("Orphan", "music", 1, "3 Doors Down")));
+        Assert.Null(await locator.LocateItemAsync(Item("No Author Here", "books", 1, "Anyone")));
+    }
+
+    [Fact]
+    public void SupportedMediaTypes_FollowTheConfiguredApplications()
+    {
+        var (all, _, _, _) = Make();
+        Assert.Equal(["music", "books", "audiobooks"], all.SupportedMediaTypes.ToArray());
+
+        var (musicOnly, _, _, _) = Make(new Dictionary<string, string> { ["lidarr_url"] = "http://lidarr.lan:8686", ["lidarr_api_key"] = "k" });
+        Assert.Equal(["music"], musicOnly.SupportedMediaTypes.ToArray());
+
+        var (movieOnly, _, _, _) = Make(new Dictionary<string, string> { ["radarr_url"] = "http://radarr.lan:7878", ["radarr_api_key"] = "k" });
+        Assert.Empty(movieOnly.SupportedMediaTypes);   // Radarr answers Kodi's scrapers, not library items
+    }
+
+    [Fact]
+    public async Task AnItemOfAnUnservedType_IsAMiss()
+    {
+        var (locator, fake, _, _) = Make();
+        Assert.Null(await locator.LocateItemAsync(Item("Heat", "movies", 0)));
+        Assert.Null(await locator.LocateItemAsync(Item("Heat", null!, 0)));
+        Assert.Empty(fake.Requests);
+    }
+
+    [Fact]
+    public async Task TheAlbumListAndTheArtistListAreCachedSeparately()
+    {
+        var (locator, fake, _, _) = Make();
+        await locator.LocateItemAsync(Item("3 Doors Down", "music", 0));
+        await locator.LocateItemAsync(Item("Seventeen Days", "music", 1, "3 Doors Down"));
+        for (var i = 0; i < 10; i++)
+        {
+            await locator.LocateItemAsync(Item("3 Doors Down", "music", 0));
+            await locator.LocateItemAsync(Item("Seventeen Days", "music", 1, "3 Doors Down"));
+        }
+        Assert.Equal(2, fake.Requests.Count);   // one read of each list
+    }
+
+    [Fact]
+    public async Task ARejectedLidarrKey_StopsItemLookupsToo()
+    {
+        var (locator, fake, _, _) = Make();
+        fake.Routes["lidarr.lan/api/v1/artist"] = (HttpStatusCode.Unauthorized, "{}");
+        Assert.Null(await locator.LocateItemAsync(Item("3 Doors Down", "music", 0)));
+        var sent = fake.Requests.Count;
+        Assert.Null(await locator.LocateItemAsync(Item("Seventeen Days", "music", 1, "3 Doors Down")));
+        Assert.Equal(sent, fake.Requests.Count);
+        Assert.DoesNotContain("music", locator.SupportedMediaTypes);
     }
 
     // ── Configuration ───────────────────────────────────────────────────────

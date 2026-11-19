@@ -30,6 +30,24 @@ internal static class ArrApps
         _ => "/author",
     };
 
+    /// <summary>The second list, for the applications whose library has a level below the first: Lidarr's albums and Readarr's books.
+    /// Null for Radarr and Sonarr.</summary>
+    public static string? SecondaryListPath(ArrApp app) => app switch
+    {
+        ArrApp.Lidarr => ApiPrefix(app) + "/album",
+        ArrApp.Readarr => ApiPrefix(app) + "/book",
+        _ => null,
+    };
+
+    /// <summary>The media type names a plugin like this declares for each application (as plugins do: "music", "books"). Chronicle
+    /// maps them to its own types; these are the plugin's words, not Chronicle's.</summary>
+    public static string[] MediaTypes(ArrApp app) => app switch
+    {
+        ArrApp.Lidarr => ["music"],
+        ArrApp.Readarr => ["books", "audiobooks"],
+        _ => [],
+    };
+
     /// <summary>A cheap call that needs a valid key, used to prove the address and key work.</summary>
     public static string StatusPath(ArrApp app) => ApiPrefix(app) + "/system/status";
 

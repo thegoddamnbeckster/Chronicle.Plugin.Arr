@@ -13,15 +13,17 @@ Chronicle matches a file by its name. Names collide: "The Beast (2026)" and "Hea
 and a name match can confuse them. Radarr already knows exactly which film each file is (it downloaded and named it), so Chronicle
 asks Radarr first and uses the TMDB id it reports.
 
-| Application | Chronicle asks | It answers with | Used for matching today |
+| Application | Chronicle asks | It answers with | Used when |
 |---|---|---|---|
-| Radarr | "which film is `The Beast (2026).mkv`?" | TMDB and IMDb ids | Yes (movies scraped by Kodi) |
-| Sonarr | "which show is this?" | TMDB and IMDb ids | Yes (TV shows scraped by Kodi) |
-| Lidarr | "which artist is this?" | MusicBrainz artist id | Not yet |
-| Readarr | "which author is this?" | Goodreads author id | Not yet |
+| Radarr | "which film is `The Beast (2026).mkv`?" | TMDB and IMDb ids | Kodi scrapes a movie |
+| Sonarr | "which show is this?" | TMDB and IMDb ids | Kodi scrapes a TV show |
+| Lidarr | "which artist is this?" / "which album by this artist?" | MusicBrainz artist id / release-group id | Chronicle identifies a music artist or album |
+| Readarr | "which author is this?" / "which book by this author?" | Goodreads author id; for a book its edition's Goodreads id and ISBN-13 | Chronicle identifies an author or a book |
 
-Lidarr and Readarr are read and tested, and are ready for when Chronicle's music and book matching asks them; today Chronicle's
-music and book paths do not consult a locator.
+For music and books, Chronicle asks before it searches a provider by name. When the answer is an id the provider uses itself (the
+MusicBrainz id for the MusicBrainz plugin) it fetches that item directly; every id the application gave is also kept on the item as a
+hint other providers read (Open Library reads the Goodreads id of a book). Tracks are not asked about: Chronicle derives them from
+their album.
 
 ## Setup
 
@@ -47,7 +49,7 @@ did. Each application's whole list is read once and kept for five minutes, so sc
 
 ## Requirements and behaviour
 
-- **Needs Chronicle 0.20.75 or later.** The plugin implements `IMediaLocator`, an interface added in that version; an older
+- **Needs Chronicle 0.20.76 or later.** The plugin implements `IMediaLocator`, an interface added in 0.20.75 and extended for music and books in 0.20.76; an older
   Chronicle does not have it and cannot load this plugin. It works on its own: nothing else needs to be installed.
 - **A rejected API key** is reported once and then nothing more is sent to that application until you save the settings again.
 - **Rate limits:** a 429 is retried twice honouring `Retry-After` (each wait capped at 4 seconds), then Chronicle is told to
