@@ -1,0 +1,45 @@
+name: release
+
+# Builds the release zip (DLL, deps.json, manifest.json: what Chronicle installs) from a version tag and attaches it to the
+# GitHub release. Push a tag such as v1.0.0 whose number matches manifest.json and the project file.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      # The plugin project references ..\Chronicle\src\Chronicle.Plugins, so the host repo sits beside it.
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+      - uses: actions/checkout@v4
+        with:
+          repository: thegoddamnbeckster/Chronicle
+          path: Chronicle
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Build, test and package
+        shell: pwsh
+        run: |
+          $manifest = Get-Content plugin/manifest.json -Raw | ConvertFrom-Json
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          if ($manifest.version -ne $tag) { throw "Tag $tag does not match manifest version $($manifest.version)" }
+          foreach ($t in Get-ChildItem plugin/tests -Recurse -Filter *.csproj) { dotnet test $t.FullName --nologo; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+          $proj = Get-ChildItem plugin -Filter *.csproj | Select-Object -First 1
+          dotnet build $proj.FullName -c Release --nologo -o plugin/out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $name = $proj.BaseName
+          Compress-Archive -Path "plugin/out/$name.dll","plugin/out/$name.deps.json","plugin/manifest.json" -DestinationPath "plugin/$($manifest.plugin_id)-v$tag.zip"
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $zip = Get-ChildItem plugin -Filter *.zip | Select-Object -First 1
+          gh release create '${{ github.ref_name }}' $zip.FullName --repo '${{ github.repository }}' --title '${{ github.ref_name }}' --generate-notes

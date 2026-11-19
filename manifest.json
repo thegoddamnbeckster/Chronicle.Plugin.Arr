@@ -1,0 +1,20 @@
+{
+  "plugin_id": "chronicle.plugin.arr",
+  "name": "Arr Apps",
+  "version": "1.0.0",
+  "author": "Chronicle Contributors",
+  "description": "A reference plugin. Asks Radarr, Sonarr, Lidarr and Readarr which film, show, artist or author a file or title really is, so Chronicle can identify it by id instead of guessing from its name. It works on its own: you need only the address and API key of each application you run, and nothing else installed. Read-only, so Chronicle never changes anything in those applications. Today Radarr and Sonarr answers are used when matching files; Lidarr and Readarr answers are read but not yet used.",
+  "min_chronicle_version": "0.20.75",
+  "entry_type": "Chronicle.Plugin.Arr.ArrMediaLocator",
+  "iconUrl": "https://wiki.servarr.com/favicon.ico",
+  "brandColorLight": "#c2570c",
+  "brandColorDark": "#d66b1d",
+  "fixMatchHint": "This plugin has no Fix Match. It never takes part in choosing a match by hand: it only tells Chronicle which film or show Radarr or Sonarr says a file is, so there is nothing to paste.",
+  "supported_media_types": [
+    "movies",
+    "tv",
+    "music",
+    "books"
+  ],
+  "settings": []
+}
