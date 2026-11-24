@@ -133,6 +133,8 @@ public sealed class ArrMediaLocator : IMediaLocator, IDisposable
                 // Library resolves. ("isbn13" is the source name Open Library's own metadata uses.)
                 if (!string.IsNullOrWhiteSpace(item.ForeignId)) ids["goodreads"] = item.ForeignId!;
                 if (!string.IsNullOrWhiteSpace(item.Isbn13)) ids["isbn13"] = item.Isbn13!;
+                // The Goodreads WORK id, under its own source so it is never mistaken for an edition id (Open Library indexes editions).
+                if (!string.IsNullOrWhiteSpace(item.WorkId)) ids["goodreads_work"] = item.WorkId!;
                 break;
         }
         return ids;
@@ -172,7 +174,19 @@ public sealed class ArrMediaLocator : IMediaLocator, IDisposable
         if (child)
         {
             match = ArrMatching.FindChild(items, query.Title, query.ParentName, query.Year);
-            if (match is null) return null;
+            if (match is null)
+            {
+                // A book or album the application should have but does not answer for is the hardest miss to see from outside: say how
+                // many the application holds by that artist or author and a few of their titles, for the first few misses only.
+                var byParent = items.Where(i => ArrMatching.Normalize(i.ParentName) == ArrMatching.Normalize(query.ParentName)).ToList();
+                if (byParent.Count > 0 && Interlocked.Increment(ref _missesLogged) <= 40)
+                {
+                    Log.Information("{PluginId}: {App} has no {What} for \"{Title}\" by \"{Parent}\": it holds {Count} by that name, e.g. {Sample}",
+                        PluginId, app, endpoint.App == ArrApp.Lidarr ? "album" : "book", query.Title, query.ParentName, byParent.Count,
+                        string.Join(" | ", byParent.Take(4).Select(i => i.Title)));
+                }
+                return null;
+            }
         }
         else
         {
@@ -260,6 +274,10 @@ public sealed class ArrMediaLocator : IMediaLocator, IDisposable
                     lock (_lock)
                         _cache[key] = (_now(), items);
                     Log.Information("{PluginId}: {App} has {Count} {What}", PluginId, ArrApps.Label(endpoint.App), items.Count, second ? "album(s) or book(s)" : "item(s)");
+                    if (second)
+                        Log.Information("{PluginId}: {App} {What} by {Parents} different names, e.g. {Sample}", PluginId, ArrApps.Label(endpoint.App), "entries are",
+                            items.Select(i => i.ParentName).Distinct().Count(),
+                            string.Join(" | ", items.Take(6).Select(i => $"{i.ParentName}: {i.Title}")));
                     return new FetchResult(items, false);
                 }
             }
@@ -285,6 +303,8 @@ public sealed class ArrMediaLocator : IMediaLocator, IDisposable
             return new FetchResult(TryGetStale(key, out var old) ? old : [], false);
         }
     }
+
+    private int _missesLogged;
 
     private async Task<List<ArrItem>?> ReadListAsync(ArrEndpoint endpoint, string path, bool second, string? authorName = null)
     {

@@ -342,6 +342,33 @@ public class LocatorTests
     }
 
     [Fact]
+    public async Task Readarr_ABookListedByAuthorWithNoEditions_IsStillFound_ByItsWorkId()
+    {
+        // A book listed author by author carries no edition list, so it has neither a Goodreads edition id nor an ISBN. It still is that
+        // book: it must not read as a miss only because there is no edition id to report.
+        var handler = new DelegateHandler(r =>
+        {
+            var body = r.RequestUri!.AbsolutePath switch
+            {
+                "/api/v1/author" => "[ { \"id\": 7, \"authorName\": \"Andy Weir\", \"foreignAuthorId\": \"1\" } ]",
+                "/api/v1/book" when r.RequestUri.Query.Contains("authorId=7") =>
+                    "[ { \"title\": \"The Martian\", \"authorId\": 7, \"foreignBookId\": \"18457474\", \"releaseDate\": \"2014-02-11T00:00:00Z\" } ]",
+                "/api/v1/book" => "[]",
+                _ => "{}",
+            };
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        });
+        var locator = new ArrMediaLocator(new ArrClient("1.0.0", new HttpClient(handler), (_, _) => Task.CompletedTask), () => DateTime.UtcNow);
+        locator.Configure(new Dictionary<string, string> { ["readarr_url"] = "http://readarr.lan:8787", ["readarr_api_key"] = "k" });
+
+        var found = await locator.LocateItemAsync(Item("The Martian (2011)", "books", 1, "Andy Weir", 2011));
+
+        Assert.NotNull(found);
+        Assert.Equal("18457474", found!.ExternalIds["goodreads_work"]);
+        Assert.False(found.ExternalIds.ContainsKey("goodreads"), "a work id is never offered as an edition id");
+    }
+
+    [Fact]
     public async Task Readarr_AnIsbnThatIsNotThirteenDigits_IsNotOffered()
     {
         var (locator, _, _, _) = Make();
@@ -354,7 +381,10 @@ public class LocatorTests
     public async Task Readarr_SameTitleByAnotherAuthor_IsNotConfused_AndAudiobooksUseTheSameApplication()
     {
         var (locator, _, _, _) = Make();
-        Assert.Null(await locator.LocateItemAsync(Item("Artemis", "books", 1, "Somebody Else")));   // that book has no edition id to give
+        // That book has no edition id to give, but it has its own work id (44), never Andy Weir's Artemis (33).
+        var other = await locator.LocateItemAsync(Item("Artemis", "books", 1, "Somebody Else"));
+        Assert.Equal("44", other!.ExternalIds["goodreads_work"]);
+        Assert.False(other.ExternalIds.ContainsKey("goodreads"));
         Assert.NotNull(await locator.LocateItemAsync(Item("The Martian", "audiobooks", 1, "Andy Weir")));
     }
 

@@ -27,6 +27,10 @@ internal sealed record ArrItem(
     /// <summary>A book's ISBN-13, when its edition has one.</summary>
     public string? Isbn13 { get; init; }
 
+    /// <summary>A Readarr book's own (Goodreads work) id. An entry listed by author carries no edition list, so this is the one id such a
+    /// book always has.</summary>
+    public string? WorkId { get; init; }
+
     /// <summary>True for an album or a book (the application's second list).</summary>
     public bool IsChild { get; init; }
 
@@ -135,7 +139,7 @@ internal static class ArrParser
             }
         }
         return new ArrItem(ArrApp.Readarr, title, null, YearOf(Str(e, "releaseDate")), [], null, [], null, null, editionId)
-        { ParentName = author, Isbn13 = isbn, IsChild = true };
+        { ParentName = author, Isbn13 = isbn, WorkId = Str(e, "foreignBookId"), IsChild = true };
     }
 
     private static int? YearOf(string? date) =>
