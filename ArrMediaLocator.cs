@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Chronicle.Plugins;
 using Chronicle.Plugins.Models;
 using Serilog;
@@ -249,10 +250,13 @@ public sealed class ArrMediaLocator : IMediaLocator, IDisposable
             {
                 var path = second ? ArrApps.SecondaryListPath(endpoint.App) : ArrApps.ListPath(endpoint.App);
                 if (path is null) return new FetchResult([], false);
-                using var doc = await _client.GetJsonAsync(endpoint, path, CancellationToken.None);
-                if (doc is not null)
+                var items = await ReadListAsync(endpoint, path, second);
+                if (items is not null)
                 {
-                    var items = ArrParser.ParseList(endpoint.App, doc, second);
+                    // Readarr's unfiltered book list is the monitored editions only, so a library whose books are not monitored
+                    // reads as empty. Every author's own list is the whole library; both are kept, without repeats.
+                    if (second && endpoint.App == ArrApp.Readarr)
+                        items = await AddEachAuthorsBooksAsync(endpoint, items);
                     lock (_lock)
                         _cache[key] = (_now(), items);
                     Log.Information("{PluginId}: {App} has {Count} {What}", PluginId, ArrApps.Label(endpoint.App), items.Count, second ? "album(s) or book(s)" : "item(s)");
@@ -281,6 +285,36 @@ public sealed class ArrMediaLocator : IMediaLocator, IDisposable
             return new FetchResult(TryGetStale(key, out var old) ? old : [], false);
         }
     }
+
+    private async Task<List<ArrItem>?> ReadListAsync(ArrEndpoint endpoint, string path, bool second, string? authorName = null)
+    {
+        using var doc = await _client.GetJsonAsync(endpoint, path, CancellationToken.None);
+        if (doc is null) return null;
+        var items = ArrParser.ParseList(endpoint.App, doc, second, authorName);
+
+        // An application that answers with entries the plugin cannot read looks exactly like an empty one: say which it is.
+        var returned = doc.RootElement.ValueKind == JsonValueKind.Array ? doc.RootElement.GetArrayLength() : 0;
+        if (returned != items.Count)
+            Log.Warning("{PluginId}: {App} {Path} returned {Returned} entries, {Readable} of them readable", PluginId, ArrApps.Label(endpoint.App), path, returned, items.Count);
+        return items;
+    }
+
+    /// <summary>The books of every Readarr author, added to <paramref name="known"/> where not already there (same author and title).</summary>
+    private async Task<List<ArrItem>> AddEachAuthorsBooksAsync(ArrEndpoint endpoint, List<ArrItem> known)
+    {
+        var seen = known.Select(BookKey).ToHashSet();
+        var all = new List<ArrItem>(known);
+        var authors = await GetItemsAsync(endpoint, false, CancellationToken.None);
+        foreach (var author in authors.Where(a => a.ArrId.HasValue))
+        {
+            var books = await ReadListAsync(endpoint, $"{ArrApps.SecondaryListPath(ArrApp.Readarr)}?authorId={author.ArrId}", true, author.Title);
+            foreach (var book in books ?? [])
+                if (seen.Add(BookKey(book))) all.Add(book);
+        }
+        return all;
+    }
+
+    private static string BookKey(ArrItem book) => ArrMatching.Normalize(book.ParentName) + "|" + ArrMatching.Normalize(book.Title);
 
     private void Latch(ArrApp app, string message)
     {

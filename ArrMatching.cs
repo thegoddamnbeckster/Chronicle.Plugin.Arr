@@ -50,7 +50,43 @@ internal static partial class ArrMatching
         var parent = Normalize(parentName);
         if (target.Length == 0 || parent.Length == 0) return null;   // an album or book is only identified within its artist or author
         var hits = items.Where(i => Normalize(i.ParentName) == parent && i.AllTitles().Any(t => Normalize(t) == target)).ToList();
+        if (hits.Count == 0)
+        {
+            // Readarr keeps a book under its plain title ("The Rosie Project"); a title read from a file name carries more
+            // ("01 - The Rosie Project", "Stormlight Archive - 1 - The Way of Kings - Part 3", "10% Happier: How I Tamed ..."). Only when
+            // the exact title finds nothing, the title's plain forms are compared with the plain forms of Readarr's own.
+            var mine = PlainForms(title);
+            hits = items.Where(i => Normalize(i.ParentName) == parent && i.AllTitles().Any(t => PlainForms(t).Overlaps(mine))).ToList();
+        }
         return Single(hits, year);
+    }
+
+    private static readonly Regex LeadingNumber = new(@"^\s*\d{1,3}\s*[-.]\s+", RegexOptions.CultureInvariant);
+    private static readonly Regex TrailingPart = new(@"[\s,\-]*\bPart\s*\d+\s*$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    /// <summary>The plain forms of a book title, normalised: with a leading track or volume number removed, a trailing "Part N" removed,
+    /// only the part after the last " - " (a series prefix in front of the title), and only the part before a subtitle's colon. A title
+    /// of one word is never reduced further than itself.</summary>
+    internal static HashSet<string> PlainForms(string? title)
+    {
+        var forms = new HashSet<string>();
+        if (string.IsNullOrWhiteSpace(title)) return forms;
+
+        var t = TrailingPart.Replace(LeadingNumber.Replace(TrailingYear().Replace(title, ""), ""), "").Trim();
+        var variants = new List<string> { t };
+        var dash = t.LastIndexOf(" - ", StringComparison.Ordinal);
+        if (dash > 0) variants.Add(t[(dash + 3)..]);
+        foreach (var v in variants.ToList())
+        {
+            var colon = v.IndexOf(':');
+            if (colon > 0) variants.Add(v[..colon]);
+        }
+        foreach (var v in variants)
+        {
+            var n = Normalize(v);
+            if (n.Length > 0) forms.Add(n);
+        }
+        return forms;
     }
 
     private static ArrItem? Single(List<ArrItem> hits, int? year)

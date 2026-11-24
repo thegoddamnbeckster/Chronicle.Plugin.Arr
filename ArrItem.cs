@@ -30,6 +30,9 @@ internal sealed record ArrItem(
     /// <summary>True for an album or a book (the application's second list).</summary>
     public bool IsChild { get; init; }
 
+    /// <summary>The application's own numeric id, kept for a Readarr author so its books can be asked for by author.</summary>
+    public int? ArrId { get; init; }
+
     /// <summary>Every title this item is known by.</summary>
     public IEnumerable<string> AllTitles()
     {
@@ -42,7 +45,7 @@ internal sealed record ArrItem(
 /// <summary>Turns each application's list response into <see cref="ArrItem"/>s. Anything unexpected is skipped, never thrown.</summary>
 internal static class ArrParser
 {
-    public static List<ArrItem> ParseList(ArrApp app, JsonDocument doc, bool secondary = false)
+    public static List<ArrItem> ParseList(ArrApp app, JsonDocument doc, bool secondary = false, string? authorName = null)
     {
         var items = new List<ArrItem>();
         if (doc.RootElement.ValueKind != JsonValueKind.Array) return items;
@@ -56,7 +59,7 @@ internal static class ArrParser
                 (ArrApp.Lidarr, false) => ParseArtist(e),
                 (ArrApp.Lidarr, true) => ParseAlbum(e),
                 (_, false) => ParseAuthor(e),
-                _ => ParseBook(e),
+                _ => ParseBook(e, authorName),
             };
             if (item is not null) items.Add(item);
         }
@@ -96,7 +99,7 @@ internal static class ArrParser
     {
         var name = Str(e, "authorName");
         if (name is null) return null;
-        return new ArrItem(ArrApp.Readarr, name, null, null, [], Str(e, "path"), [], null, null, Str(e, "foreignAuthorId"));
+        return new ArrItem(ArrApp.Readarr, name, null, null, [], Str(e, "path"), [], null, null, Str(e, "foreignAuthorId")) { ArrId = Int(e, "id") };
     }
 
     /// <summary>A Lidarr album: its foreignAlbumId is the MusicBrainz release-group id; the artist is nested.</summary>
@@ -111,10 +114,11 @@ internal static class ArrParser
 
     /// <summary>A Readarr book: the author is nested; the monitored edition (else the first) supplies the Goodreads edition id and the
     /// ISBN-13. The book's own foreignBookId is a Goodreads WORK id, which Open Library does not index; the edition id is the one it does.</summary>
-    private static ArrItem? ParseBook(JsonElement e)
+    private static ArrItem? ParseBook(JsonElement e, string? authorName)
     {
         var title = Str(e, "title");
-        var author = e.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object ? Str(a, "authorName") : null;
+        // The author nested in the book; a list asked for one author's books may leave it out, and then it is that author.
+        var author = (e.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object ? Str(a, "authorName") : null) ?? authorName;
         if (title is null || author is null) return null;
 
         string? editionId = null, isbn = null;

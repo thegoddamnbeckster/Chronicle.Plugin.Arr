@@ -259,6 +259,89 @@ public class LocatorTests
     }
 
     [Fact]
+    public async Task Readarr_BooksThatAreNotMonitored_AreFoundThroughTheirAuthor_WhenTheUnfilteredListIsEmpty()
+    {
+        // Readarr's unfiltered /book is the monitored editions only: a library with none monitored reads as empty. Each author's
+        // own list (?authorId=) holds the books, so the plugin asks for those too.
+        var requests = new List<string>();
+        var handler = new DelegateHandler(r =>
+        {
+            requests.Add(r.RequestUri!.PathAndQuery);
+            var body = r.RequestUri.AbsolutePath switch
+            {
+                "/api/v1/author" => "[ { \"id\": 7, \"authorName\": \"Andy Weir\", \"foreignAuthorId\": \"1\" } ]",
+                "/api/v1/book" when r.RequestUri.Query.Contains("authorId=7") => ReadarrBooks,
+                "/api/v1/book" => "[]",
+                _ => "{}",
+            };
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        });
+        var locator = new ArrMediaLocator(new ArrClient("1.0.0", new HttpClient(handler), (_, _) => Task.CompletedTask), () => DateTime.UtcNow);
+        locator.Configure(new Dictionary<string, string> { ["readarr_url"] = "http://readarr.lan:8787", ["readarr_api_key"] = "k" });
+
+        var found = await locator.LocateItemAsync(Item("The Martian", "books", 1, "Andy Weir", 2014));
+
+        Assert.Equal("18007564", found!.ExternalIds["goodreads"]);
+        Assert.Contains(requests, q => q.Contains("authorId=7"));
+    }
+
+    [Fact]
+    public async Task Readarr_AnAuthorsBooksThatCarryNoNestedAuthor_AreStillTheirAuthors()
+    {
+        // A list asked for by author may leave the author out of each book; the book is still that author's, and is not dropped.
+        var handler = new DelegateHandler(r =>
+        {
+            var body = r.RequestUri!.AbsolutePath switch
+            {
+                "/api/v1/author" => "[ { \"id\": 7, \"authorName\": \"Andy Weir\", \"foreignAuthorId\": \"1\" } ]",
+                "/api/v1/book" when r.RequestUri.Query.Contains("authorId=7") =>
+                    "[ { \"title\": \"The Martian\", \"authorId\": 7, \"releaseDate\": \"2014-02-11T00:00:00Z\", \"editions\": [ { \"foreignEditionId\": \"18007564\", \"monitored\": true } ] } ]",
+                "/api/v1/book" => "[]",
+                _ => "{}",
+            };
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        });
+        var locator = new ArrMediaLocator(new ArrClient("1.0.0", new HttpClient(handler), (_, _) => Task.CompletedTask), () => DateTime.UtcNow);
+        locator.Configure(new Dictionary<string, string> { ["readarr_url"] = "http://readarr.lan:8787", ["readarr_api_key"] = "k" });
+
+        var found = await locator.LocateItemAsync(Item("The Martian", "books", 1, "Andy Weir", 2014));
+
+        Assert.Equal("18007564", found!.ExternalIds["goodreads"]);
+    }
+
+    [Theory]
+    [InlineData("01 - The Martian")]                                        // a leading volume or track number
+    [InlineData("The Martian (2014)")]                                      // a trailing year
+    [InlineData("The Martian - Part 2")]                                    // a trailing "Part N"
+    [InlineData("Some Series - 1 - The Martian")]                           // a series prefix in front of the title
+    [InlineData("19 - Some Series - 1 - The Martian - Part 3")]             // all of them together
+    public async Task Readarr_ATitleReadFromAFileName_FindsTheBookUnderItsPlainTitle(string fileTitle)
+    {
+        var (locator, _, _, _) = Make();
+        var found = await locator.LocateItemAsync(Item(fileTitle, "books", 1, "Andy Weir"));
+
+        Assert.Equal("18007564", found!.ExternalIds["goodreads"]);
+    }
+
+    [Fact]
+    public async Task Readarr_ASubtitleOnOneSideOnly_StillMatches()
+    {
+        var (locator, _, _, _) = Make();
+        var found = await locator.LocateItemAsync(Item("The Martian: A Novel", "books", 1, "Andy Weir"));
+
+        Assert.Equal("18007564", found!.ExternalIds["goodreads"]);
+    }
+
+    [Fact]
+    public async Task Readarr_AnUnrelatedTitle_IsStillAMiss_AndSoIsTheSameTitleByAnotherAuthor()
+    {
+        var (locator, _, _, _) = Make();
+
+        Assert.Null(await locator.LocateItemAsync(Item("01 - Project Hail Mary", "books", 1, "Andy Weir")));
+        Assert.Null(await locator.LocateItemAsync(Item("01 - The Martian", "books", 1, "Somebody Else")));
+    }
+
+    [Fact]
     public async Task Readarr_AnIsbnThatIsNotThirteenDigits_IsNotOffered()
     {
         var (locator, _, _, _) = Make();
