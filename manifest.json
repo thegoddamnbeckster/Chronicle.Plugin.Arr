@@ -1,7 +1,7 @@
 {
   "plugin_id": "chronicle.plugin.arr",
   "name": "Arr Apps",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "author": "Chronicle Contributors",
   "description": "A reference plugin. Asks Radarr, Sonarr, Lidarr and Readarr which film, show, artist or author a file or title really is, so Chronicle can identify it by id instead of guessing from its name. It works on its own: you need only the address and API key of each application you run, and nothing else installed. Read-only, so Chronicle never changes anything in those applications. Radarr and Sonarr answers are used when Kodi scrapes a film or show; Lidarr and Readarr answers are used when Chronicle identifies a music artist or album and a book or its author.",
   "min_chronicle_version": "0.20.76",

@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Chronicle.Plugin.Arr</AssemblyName>
     <RootNamespace>Chronicle.Plugin.Arr</RootNamespace>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <Authors>Chronicle Contributors</Authors>
     <Description>Reference plugin for Chronicle: asks Radarr, Sonarr, Lidarr and Readarr which film, show, artist or author a file or title really is. Read-only.</Description>
   </PropertyGroup>
